@@ -1,6 +1,8 @@
 package com.example.quarkmdreader
 
 import android.os.Bundle
+import android.webkit.CookieManager
+import android.webkit.WebStorage
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,6 +59,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onLogout = {
                                     quarkApi.clearLogin()
+                                    // 清理 WebView 内部 Cookie 与 LocalStorage
+                                    try {
+                                        CookieManager.getInstance().removeAllCookies(null)
+                                        CookieManager.getInstance().flush()
+                                        WebStorage.getInstance().deleteAllData()
+                                    } catch (_: Exception) {}
                                     currentScreen = Screen.Login
                                 }
                             )

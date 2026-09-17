@@ -1,23 +1,25 @@
 package com.example.quarkmdreader.ui.component
 
-import android.content.Context
-import android.widget.TextView
+import android.annotation.SuppressLint
+import android.net.Uri
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import coil.ImageLoader
 import com.example.quarkmdreader.data.api.QuarkApiService
-import com.example.quarkmdreader.data.image.QuarkImageFetcher
-import com.example.quarkmdreader.data.image.QuarkImageRequest
-import io.noties.markwon.Markwon
-import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
-import io.noties.markwon.ext.tables.TablePlugin
-import io.noties.markwon.ext.tasklist.TaskListPlugin
-import io.noties.markwon.image.AsyncDrawable
-import io.noties.markwon.image.coil.CoilImagesPlugin
+import org.json.JSONObject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import java.io.ByteArrayInputStream
 
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun MarkdownViewer(
     markdownText: String,
@@ -26,56 +28,103 @@ fun MarkdownViewer(
     modifier: Modifier = Modifier
 ) {
     val isDark = isSystemInDarkTheme()
+    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    var isPageLoaded by remember { mutableStateOf(false) }
+
+    // 当 markdownText 或主题发生变化时，调用 JS 函数更新页面内容
+    LaunchedEffect(markdownText, isDark, isPageLoaded) {
+        if (isPageLoaded && webViewInstance != null) {
+            val escapedText = JSONObject.quote(markdownText)
+            webViewInstance?.evaluateJavascript("renderMarkdown($escapedText, $isDark);", null)
+        }
+    }
 
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
-            val textView = TextView(ctx).apply {
-                setTextIsSelectable(true)
-                textSize = 15f
-                setLineSpacing(6f, 1.2f)
-            }
-
-            val imageLoader = ImageLoader.Builder(ctx)
-                .components {
-                    add(QuarkImageFetcher.Factory(quarkApi))
+            WebView(ctx).apply {
+                settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    allowFileAccess = true
+                    cacheMode = WebSettings.LOAD_DEFAULT
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
                 }
-                .crossfade(true)
-                .build()
 
-            val markwon = Markwon.builder(ctx)
-                .usePlugin(TablePlugin.create(ctx))
-                .usePlugin(StrikethroughPlugin.create())
-                .usePlugin(TaskListPlugin.create(ctx))
-                .usePlugin(
-                    CoilImagesPlugin.create(
-                        object : CoilImagesPlugin.CoilStore {
-                            override fun load(drawable: AsyncDrawable): coil.request.ImageRequest {
-                                val destination = drawable.destination
-                                val requestData = if (destination.startsWith("http://") || destination.startsWith("https://")) {
-                                    destination
-                                } else {
-                                    QuarkImageRequest(currentDirFid, destination)
-                                }
-                                return coil.request.ImageRequest.Builder(ctx)
-                                    .data(requestData)
-                                    .build()
-                            }
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        isPageLoaded = true
+                        val escapedText = org.json.JSONObject.quote(markdownText)
+                        view?.evaluateJavascript("renderMarkdown($escapedText, $isDark);", null)
+                    }
 
-                            override fun cancel(drawable: AsyncDrawable) {
-                                // 退出视图或滑动走时取消加载，节约内存
-                            }
-                        },
-                        imageLoader
-                    )
-                )
-                .build()
+                    // 拦截图片等相对路径资源，自动从夸克网盘流式加载
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): WebResourceResponse? {
+                        val uri = request?.url ?: return null
+                        val scheme = uri.scheme ?: ""
+                        val path = uri.path ?: ""
 
-            markwon.setMarkdown(textView, markdownText)
-            textView
+                        // 拦截相对路径资源（例如 images/... 或 custom-quark://...）
+                        if (scheme == "quark-img" || (scheme == "file" && !path.contains("android_asset"))) {
+                            val relativePath = uri.toString()
+                                .replace("quark-img://", "")
+                                .replace("file:///", "")
+                                .replace("file://", "")
+
+                            return fetchQuarkImageResponse(quarkApi, currentDirFid, relativePath)
+                        }
+
+                        // 如果是 marked 默认解析生成的相对路径请求（如 https://local.quark/xxx 或 http://...）
+                        if (uri.host == "local.quark" || uri.toString().startsWith("http://localhost/")) {
+                            val cleanPath = uri.path?.removePrefix("/") ?: ""
+                            return fetchQuarkImageResponse(quarkApi, currentDirFid, cleanPath)
+                        }
+
+                        return super.shouldInterceptRequest(view, request)
+                    }
+                }
+
+                loadUrl("file:///android_asset/math_markdown_template.html")
+                webViewInstance = this
+            }
         },
-        update = { textView ->
-            textView.setTextColor(if (isDark) 0xFFEEEEEE.toInt() else 0xFF222222.toInt())
+        update = { webView ->
+            if (isPageLoaded) {
+                val escapedText = org.json.JSONObject.quote(markdownText)
+                webView.evaluateJavascript("renderMarkdown($escapedText, $isDark);", null)
+            }
         }
     )
+}
+
+/**
+ * 流式获取夸克网盘相对路径图片并封装为 WebResourceResponse
+ */
+private fun fetchQuarkImageResponse(
+    quarkApi: QuarkApiService,
+    currentDirFid: String,
+    relativePath: String
+): WebResourceResponse? {
+    return try {
+        runBlocking(Dispatchers.IO) {
+            val fid = quarkApi.findFileFidByRelativePath(currentDirFid, relativePath) ?: return@runBlocking null
+            val inputStream = quarkApi.getFileInputStream(fid) ?: return@runBlocking null
+            val mimeType = when {
+                relativePath.endsWith(".png", true) -> "image/png"
+                relativePath.endsWith(".jpg", true) || relativePath.endsWith(".jpeg", true) -> "image/jpeg"
+                relativePath.endsWith(".gif", true) -> "image/gif"
+                relativePath.endsWith(".svg", true) -> "image/svg+xml"
+                relativePath.endsWith(".webp", true) -> "image/webp"
+                else -> "image/*"
+            }
+            WebResourceResponse(mimeType, "UTF-8", inputStream)
+        }
+    } catch (e: Exception) {
+        null
+    }
 }

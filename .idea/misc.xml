@@ -3,5 +3,9 @@
   <component name="Black">
     <option name="sdkName" value="uv (PythonProject)" />
   </component>
-  <component name="ProjectRootManager" version="2" project-jdk-name="uv (PythonProject)" project-jdk-type="Python SDK" />
+  <component name="ExternalStorageConfigurationManager" enabled="true" />
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_21" project-jdk-name="uv (Quark_Online_MD_Viewer)" project-jdk-type="Python SDK" />
+  <component name="ProjectType">
+    <option name="id" value="Android" />
+  </component>
 </project>

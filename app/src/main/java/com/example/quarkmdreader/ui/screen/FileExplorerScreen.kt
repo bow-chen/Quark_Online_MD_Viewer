@@ -5,7 +5,14 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -57,7 +64,7 @@ fun FileExplorerScreen(
                 navigationIcon = {
                     if (dirStack.size > 1) {
                         IconButton(onClick = { dirStack.removeAt(dirStack.size - 1) }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "返回上一级")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回上一级")
                         }
                     } else {
                         Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.padding(start = 12.dp))
@@ -68,7 +75,7 @@ fun FileExplorerScreen(
                         Icon(Icons.Default.Refresh, contentDescription = "刷新")
                     }
                     IconButton(onClick = onLogout) {
-                        Icon(Icons.Default.Logout, contentDescription = "退出登录")
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = "退出登录")
                     }
                 }
             )
@@ -138,9 +145,9 @@ fun FileListItem(
     ) {
         val icon = when {
             file.isDir -> Icons.Default.Folder
-            file.isMarkdown -> Icons.Default.Article
+            file.isMarkdown -> Icons.AutoMirrored.Filled.Article
             file.isImage -> Icons.Default.Image
-            else -> Icons.Default.InsertDriveFile
+            else -> Icons.AutoMirrored.Filled.InsertDriveFile
         }
 
         val iconTint = when {

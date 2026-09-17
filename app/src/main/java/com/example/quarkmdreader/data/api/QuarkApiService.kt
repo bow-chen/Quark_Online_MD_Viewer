@@ -46,22 +46,38 @@ class QuarkApiService(private val context: Context) {
      */
     suspend fun getFileList(pdirFid: String = "0"): Result<List<QuarkFile>> = withContext(Dispatchers.IO) {
         try {
-            val url = "https://drive.quark.cn/1/clouddrive/file/sort" +
-                    "?pdir_fid=$pdirFid&_page=1&_size=200&_sort=file_type:asc,updated_at:desc"
+            val timestamp = System.currentTimeMillis()
+            // 使用与 OpenList / AList 完全一致的 drive-pc 端点与参数 (pr=ucpro, fr=pc)
+            val url = "https://drive-pc.quark.cn/1/clouddrive/file/sort" +
+                    "?pr=ucpro&fr=pc&pdir_fid=$pdirFid&_page=1&_size=200&_sort=file_type:asc,updated_at:desc&_fetch_total=1&_t=$timestamp"
+
+            val rawCookie = getCookie().trim().replace("\n", " ").replace("\r", "")
             val request = Request.Builder()
                 .url(url)
-                .header("Cookie", getCookie())
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .header("Cookie", rawCookie)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .header("Referer", "https://pan.quark.cn/")
+                .header("Origin", "https://pan.quark.cn")
+                .header("Accept", "application/json, text/plain, */*")
+                .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
                 .build()
 
             val response = client.newCall(request).execute()
-            val body = response.body?.string() ?: return@withContext Result.failure(Exception("空响应"))
+            val code = response.code
+            val body = response.body?.string() ?: return@withContext Result.failure(Exception("HTTP $code: 空响应"))
+
+            if (!body.trim().startsWith("{")) {
+                val preview = if (body.length > 120) body.take(120) + "..." else body
+                return@withContext Result.failure(Exception("HTTP $code 返回非JSON数据 (可能Cookie格式不匹配或触发验证码):\n$preview"))
+            }
+
             val json = JSONObject(body)
 
-            if (json.optInt("code", -1) != 0 && json.optInt("status", -1) != 200) {
+            val status = json.optInt("status", -1)
+            val resCode = json.optInt("code", -1)
+            if (status != 200 && resCode != 0 && (status != -1 || resCode != -1)) {
                 val msg = json.optString("message", "获取文件列表失败")
-                return@withContext Result.failure(Exception(msg))
+                return@withContext Result.failure(Exception("夸克API返回: $msg (status:$status, code:$resCode)"))
             }
 
             val dataObj = json.optJSONObject("data")
@@ -82,10 +98,55 @@ class QuarkApiService(private val context: Context) {
                     )
                 )
             }
-            Result.success(files)
+
+            // 自然排序（文件夹在前，文件在后；同类型按名称升序支持数字自然排序）
+            val sortedFiles = files.sortedWith(
+                compareBy<QuarkFile> { !it.isDir }
+                    .thenComparator { a, b -> naturalCompare(a.fileName, b.fileName) }
+            )
+
+            Result.success(sortedFiles)
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    /**
+     * 自然字母+数字排序（例如 "1...", "2...", "10..." 正确排序，而不是字典序 1, 10, 2）
+     */
+    private fun naturalCompare(s1: String, s2: String): Int {
+        var i = 0
+        var j = 0
+        while (i < s1.length && j < s2.length) {
+            val c1 = s1[i]
+            val c2 = s2[j]
+
+            if (c1.isDigit() && c2.isDigit()) {
+                var num1Str = ""
+                while (i < s1.length && s1[i].isDigit()) {
+                    num1Str += s1[i]
+                    i++
+                }
+                var num2Str = ""
+                while (j < s2.length && s2[j].isDigit()) {
+                    num2Str += s2[j]
+                    j++
+                }
+                val num1 = num1Str.toLongOrNull() ?: 0L
+                val num2 = num2Str.toLongOrNull() ?: 0L
+                if (num1 != num2) {
+                    return num1.compareTo(num2)
+                }
+            } else {
+                val diff = c1.lowercaseChar().compareTo(c2.lowercaseChar())
+                if (diff != 0) {
+                    return diff
+                }
+                i++
+                j++
+            }
+        }
+        return s1.length.compareTo(s2.length)
     }
 
     /**
@@ -93,18 +154,22 @@ class QuarkApiService(private val context: Context) {
      */
     suspend fun getDownloadUrl(fid: String): Result<String> = withContext(Dispatchers.IO) {
         try {
-            val url = "https://drive.quark.cn/1/clouddrive/file/download"
+            val timestamp = System.currentTimeMillis()
+            val url = "https://drive-pc.quark.cn/1/clouddrive/file/download?pr=ucpro&fr=pc&_t=$timestamp"
             val jsonBody = JSONObject().apply {
                 put("fids", JSONArray().put(fid))
             }
             val requestBody = jsonBody.toString().toRequestBody("application/json".toMediaType())
+            val rawCookie = getCookie().trim().replace("\n", " ").replace("\r", "")
 
             val request = Request.Builder()
                 .url(url)
                 .post(requestBody)
-                .header("Cookie", getCookie())
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                .header("Cookie", rawCookie)
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                 .header("Referer", "https://pan.quark.cn/")
+                .header("Origin", "https://pan.quark.cn")
+                .header("Accept", "application/json, text/plain, */*")
                 .build()
 
             val response = client.newCall(request).execute()
